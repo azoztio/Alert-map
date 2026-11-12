@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Карта тревог: Украина и Россия</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root { --ink:#17202a; --paper:#f4f5f2; --line:#d5d8d2; --muted:#5d6670; }
+  @media (prefers-color-scheme: dark) { :root { --ink:#e8ebe6; --paper:#1a1f24; --line:#363d44; --muted:#9aa4ae; } }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font: 15px/1.4 Onest, system-ui, sans-serif; color: var(--ink); background: var(--paper); display: flex; flex-direction: column; }
+  .ad { padding: 8px 14px; padding-top: calc(8px + env(safe-area-inset-top, 0px)); background: var(--ink); color: var(--paper); text-align: center; font-size: 14px; font-weight: 600; }
+  .ad a { color: inherit; text-decoration: underline; }
+  header { padding: 10px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  h1 { font-size: 17px; font-weight: 800; margin: 0; }
+  #status { color: var(--muted); font-size: 13px; }
+  #status.bad { color: #d6361f; font-weight: 600; }
+  main { flex: 1; display: flex; min-height: 0; }
+  #map { flex: 1; min-height: 0; }
+  aside { width: 320px; overflow: auto; border-left: 1px solid var(--line); padding: 10px 14px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 10px; font-size: 13px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
+  .item { padding: 8px 0; border-top: 1px solid var(--line); cursor: pointer; }
+  .item b { font-weight: 600; }
+  .item small { color: var(--muted); display: block; }
+  @media (max-width: 760px) {
+    main { flex-direction: column; }
+    aside { width: 100%; max-height: 34%; border-left: 0; border-top: 1px solid var(--line); padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+  }
+  .leaflet-popup-content { font-family: inherit; }
+</style>
+</head>
+<body>
+<div class="ad">Здесь может быть ваша реклама. Писать: <a href="https://t.me/otmena011" target="_blank" rel="noopener">@otmena011</a></div>
+<header>
+  <h1>Карта тревог</h1>
+  <span id="status">Загрузка…</span>
+</header>
+<main>
+  <div id="map"></div>
+  <aside>
+    <div class="legend" id="legend"></div>
+    <div id="list"></div>
+  </aside>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+// Типы угроз: название, цвет, приоритет (меньше = опаснее)
+const TYPES = {
+  missile:            { name: "Ракетная опасность",  color: "#b3122d", rank: 1 },
+  chemical:           { name: "Химическая угроза",   color: "#7a3db8", rank: 0 },
+  radiation:          { name: "Радиационная угроза", color: "#0f8f8f", rank: 0 },
+  urban_fights:       { name: "Уличные бои",         color: "#8a1c1c", rank: 2 },
+  air_raid:           { name: "Воздушная тревога",   color: "#d6361f", rank: 3 },
+  uav:                { name: "Угроза БПЛА",         color: "#e07b00", rank: 4 },
+  artillery_shelling: { name: "Артобстрел",          color: "#c99a00", rank: 5 },
+};
+const REFRESH_MS = 60 * 1000;
+
+const map = L.map("map", { zoomControl: true }).setView([50.0, 38.0], 5);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 12, attribution: "© OpenStreetMap contributors",
+}).addTo(map);
+const layer = L.layerGroup().addTo(map);
+let lastOk = 0;
+
+document.getElementById("legend").innerHTML = Object.values(TYPES)
+  .map(t => `<span><i class="dot" style="background:${t.color}"></i>${t.name}</span>`).join("");
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const info = t => TYPES[t] || { name: t, color: "#888", rank: 9 };
+
+function draw(items) {
+  layer.clearLayers();
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+  items
+    .map(r => ({ ...r, top: r.threats.map(t => info(t.type)).sort((a, b) => a.rank - b.rank)[0] }))
+    .filter(r => r.top)
+    .sort((a, b) => a.top.rank - b.top.rank)
+    .forEach(r => {
+      const rows = r.threats.map(t => {
+        const areas = (t.areas || []).slice(0, 12).join(", ");
+        return `<div><b>${esc(info(t.type).name)}</b>${areas ? `<br><small>${esc(areas)}</small>` : ""}</div>`;
+      }).join("");
+      const m = L.circleMarker([r.lat, r.lon], {
+        radius: 9 + Math.min(r.threats.length, 3) * 3, color: "#fff", weight: 2,
+        fillColor: r.top.color, fillOpacity: 0.85,
+      }).bindPopup(`<strong>${esc(r.region)}</strong>${rows}`).addTo(layer);
+      const el = document.createElement("div");
+      el.className = "item";
+      el.innerHTML = `<b><i class="dot" style="background:${r.top.color}"></i>${esc(r.region)}</b>` +
+        `<small>${r.threats.map(t => esc(info(t.type).name)).join(", ")}</small>`;
+      el.onclick = () => { map.setView([r.lat, r.lon], 7); m.openPopup(); };
+      list.appendChild(el);
+    });
+  if (!list.children.length) list.innerHTML = '<div class="item">Активных угроз в источниках нет</div>';
+}
+
+async function load() {
+  const st = document.getElementById("status");
+  try {
+    const r = await fetch("/api/alerts", { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    draw([...(d.ukraine || []), ...(d.russia || [])]);
+    lastOk = Date.now();
+    st.className = "";
+    st.textContent = "Обновлено " + new Date().toLocaleTimeString("ru-RU") +
+      (d.errors && d.errors.length ? " · часть источников недоступна" : "");
+  } catch (e) {
+    const mins = lastOk ? Math.round((Date.now() - lastOk) / 60000) : null;
+    st.className = "bad";
+    st.textContent = "Нет связи с сервером" + (mins !== null ? `, данные устарели на ${mins} мин` : "");
+  }
+}
+load();
+setInterval(load, REFRESH_MS);
+</script>
+</body>
+</html>
